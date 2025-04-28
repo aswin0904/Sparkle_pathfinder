@@ -20,7 +20,7 @@ You may be interested in:
 - DRV8833 Dual Motor Driver
 - N20 600 RPM Geared Motors
 - HC-05 Bluetooth Module
-- 7.4V Li-ion Battery Pack
+- 7.4V Lipo Battery Pack
 
 ---
 
