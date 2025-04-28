@@ -39,7 +39,7 @@ You may be interested in:
 ## Photos
 
 ### Front View of the Robot
-![Robot Front View](images/robot-front-view.jpg)
+![Robot Top View](/topview.jpg)
 
 ### Circuit Diagram
 ![Circuit Diagram](images/circuit-diagram.png)
