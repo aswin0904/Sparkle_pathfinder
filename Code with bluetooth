@@ -1,0 +1,225 @@
+#include <QTRSensors.h>
+#include <SoftwareSerial.h>  // Include the SoftwareSerial library
+
+// Define RX and TX pins for Bluetooth communication
+#define RX_PIN 7
+#define TX_PIN 8
+
+SoftwareSerial mySerial(RX_PIN, TX_PIN);  // Create a SoftwareSerial object for Bluetooth communication
+
+// Motor driver pins for DRV8833
+const int IN1 = 5;  // Motor A direction
+const int IN2 = 6;  // Motor A speed (PWM)
+const int IN3 = 9;  // Motor B direction
+const int IN4 = 10; // Motor B speed (PWM)
+
+const int maxspeeda = 100;
+const int maxspeedb = 100;
+const int basespeeda = 80;
+const int basespeedb = 80;
+const int minspeeda = 0;
+const int minspeedb = 0;
+
+// PID variables
+float Kp = 0, Ki = 0, Kd = 0;
+uint8_t multiP = 1, multiI = 1, multiD = 1;
+float Pvalue, Ivalue, Dvalue;
+int lastError = 0, I = 0;
+
+// Bluetooth control variables
+int val, cnt = 0, v[3];
+boolean onoff = 0;
+
+// QTR sensor setup
+QTRSensors qtr;
+const uint8_t SensorCount = 8;
+uint16_t sensorValues[SensorCount];
+
+// Per-sensor threshold values
+const uint16_t whiteThresholds[SensorCount] = {48, 48, 96, 96, 148, 100, 48, 48};
+const uint16_t blackThresholds[SensorCount] = {2500, 2500, 2500, 2500, 2500, 2500, 2500, 2500};
+
+void setup() {
+  Serial.begin(9600);        // Debug Serial
+  mySerial.begin(9600);      // Bluetooth Serial
+
+  qtr.setTypeRC();
+  qtr.setSensorPins((const uint8_t[]){A0, A1, A2, A3, A4, A5, 11, 12}, SensorCount);
+
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+  pinMode(LED_BUILTIN, OUTPUT);
+
+  delay(500);
+  forward_brake(0, 0);  // Stop motors initially
+}
+
+void loop() {
+  if (mySerial.available()) {
+    while (mySerial.available() > 0) {
+      valuesread();
+      processing();
+    }
+  }
+
+  if (onoff == 1) {
+    robot_control();
+  } else {
+    forward_brake(0, 0);
+  }
+}
+
+void valuesread() {
+  val = mySerial.read();
+  cnt++;
+  v[cnt] = val;
+  if (cnt == 2) {
+    cnt = 0;
+  }
+}
+
+void processing() {
+  int a = v[1];
+
+  if (a == 1) {
+    Kp = v[2];
+    Serial.print("Kp set to: ");
+    Serial.println(Kp);
+  }
+  if (a == 2) {
+    multiP = v[2];
+    Serial.print("multiP set to: ");
+    Serial.println(multiP);
+  }
+  if (a == 3) {
+    Ki = v[2];
+    Serial.print("Ki set to: ");
+    Serial.println(Ki);
+  }
+  if (a == 4) {
+    multiI = v[2];
+    Serial.print("multiI set to: ");
+    Serial.println(multiI);
+  }
+  if (a == 5) {
+    Kd = v[2];
+    Serial.print("Kd set to: ");
+    Serial.println(Kd);
+  }
+  if (a == 6) {
+    multiD = v[2];
+    Serial.print("multiD set to: ");
+    Serial.println(multiD);
+  }
+  if (a == 7) {
+    onoff = v[2];
+    Serial.print("onoff set to: ");
+    Serial.println(onoff);
+  }
+}
+
+void robot_control() {
+  uint16_t position = qtr.readLineBlack(sensorValues);
+  int error = 3500 - position;
+
+  int activeSensors = 0;
+  float sum = 0;
+  for (int i = 0; i < SensorCount; i++) {
+    if (sensorValues[i] >= whiteThresholds[i] && sensorValues[i] <= blackThresholds[i]) {
+      activeSensors++;
+      sum += i;
+    }
+  }
+
+  if (activeSensors >= 3) {
+    int avgPos = sum / activeSensors;
+    if (avgPos < 3.5) right_brake(100, 100);
+    else if (avgPos > 3.5) left_brake(100, 100);
+    else {
+      uint16_t mini = 1000;
+      uint8_t minpos = 0;
+      for (int i = 4 - activeSensors / 2; i <= 3 + activeSensors / 2; i++) {
+        if (sensorValues[i] < mini) {
+          mini = sensorValues[i];
+          minpos = i;
+        }
+      }
+      if (minpos < 3.5) right_brake(100, 100);
+      else if (minpos > 3.5) left_brake(100, 100);
+    }
+  } else {
+    PID(error);
+  }
+
+  // Debug Output
+  Serial.print("Sensor Values: ");
+  for (int i = 0; i < SensorCount; i++) {
+    Serial.print(sensorValues[i]);
+    Serial.print(" ");
+  }
+  Serial.print(" | Pos: ");
+  Serial.print(position);
+  Serial.print(" | Err: ");
+  Serial.print(error);
+  Serial.print(" | P: ");
+  Serial.print(Pvalue);
+  Serial.print(" I: ");
+  Serial.print(Ivalue);
+  Serial.print(" D: ");
+  Serial.println(Dvalue);
+}
+
+void PID(int error) {
+  int P = error;
+  I += error;
+  int D = error - lastError;
+  lastError = error;
+
+  Pvalue = (Kp / pow(10, multiP)) * P;
+  Ivalue = (Ki / pow(10, multiI)) * I;
+  Dvalue = (Kd / pow(10, multiD)) * D;
+
+  float motorspeed = Pvalue + Ivalue + Dvalue;
+  int motorspeeda = basespeeda + motorspeed;
+  int motorspeedb = basespeedb - motorspeed;
+
+  motorspeeda = constrain(motorspeeda, minspeeda, maxspeeda);
+  motorspeedb = constrain(motorspeedb, minspeedb, maxspeedb);
+
+  speedcontrol(motorspeeda, motorspeedb);
+}
+
+void speedcontrol(int mota, int motb) {
+  if (mota >= 0 && motb >= 0) {
+    forward_brake(mota, motb);
+  } else if (mota < 0 && motb >= 0) {
+    mota = -mota;
+    right_brake(mota, motb);
+  } else if (mota >= 0 && motb < 0) {
+    motb = -motb;
+    left_brake(mota, motb);
+  }
+}
+
+void forward_brake(int speedA, int speedB) {
+  digitalWrite(IN1, HIGH);
+  analogWrite(IN2, speedA);
+  digitalWrite(IN3, HIGH);
+  analogWrite(IN4, speedB);
+}
+
+void left_brake(int speedA, int speedB) {
+  digitalWrite(IN1, LOW);
+  analogWrite(IN2, speedA);
+  digitalWrite(IN3, HIGH);
+  analogWrite(IN4, speedB);
+}
+
+void right_brake(int speedA, int speedB) {
+  digitalWrite(IN1, HIGH);
+  analogWrite(IN2, speedA);
+  digitalWrite(IN3, LOW);
+  analogWrite(IN4, speedB);
+}
