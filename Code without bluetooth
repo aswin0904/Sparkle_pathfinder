@@ -1,0 +1,207 @@
+#include <QTRSensors.h>
+//#include <SoftwareSerial.h>
+
+#define SensorCount 8
+QTRSensors qtr;
+uint16_t sensorValues[SensorCount];
+
+// Motor pins
+const int IN1 = 5;
+const int IN2 = 6;
+const int IN3 = 9;
+const int IN4 = 10;
+
+// Bluetooth
+//SoftwareSerial mySerial(7, 8); // RX, TX
+
+// PID parameters
+int position;
+float Kp = 0.08,
+Ki = 0.0000,
+Kd = 0.032;
+float multiP = 1.0, multiI = 1.0, multiD = 1.0;
+//int baseSpeed = 110;
+//long integral = 0;
+int lastError = 0;
+float Kpfinal;
+float Kifinal;
+float Kdfinal;
+int onoff = 1;
+float Pvalue;
+float Ivalue;
+float Dvalue;
+int P, D, I, previousError, PIDvalue, error;
+int lsp, rsp;
+int lfspeed = 85;
+// Bluetooth buffer
+byte v[3];
+int cnt = 0;
+byte val;
+
+void setup() {
+  Serial.begin(9600);
+  //mySerial.begin(9600);
+
+  qtr.setTypeRC();
+  qtr.setSensorPins((const uint8_t[]){A0, A1, A2, A3, A4, A5, 11, 12}, SensorCount);
+  qtr.setTimeout(2500);
+  qtr.setSamplesPerSensor(5);
+
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  Serial.println("Calibrating sensors...");
+  for (int i = 0; i < 2; i++) {
+    calibrateRobotPosition();
+  }
+  stopMotors();
+  delay(1000);
+  Serial.println("Calibration done.");
+  for (uint8_t i = 0; i < SensorCount; i++)
+  {
+    Serial.print(qtr.calibrationOn.minimum[i]);
+    Serial.print(' ');
+  }
+  Serial.println();
+
+  // print the calibration maximum values measured when emitters were on
+  for (uint8_t i = 0; i < SensorCount; i++)
+  {
+    Serial.print(qtr.calibrationOn.maximum[i]);
+    Serial.print(' ');
+  }
+  Serial.println();
+}
+
+void loop() {
+
+  if (onoff == 1) {
+    robot_control();
+  } else {
+    stopMotors();
+  }
+}
+
+void robot_control() {
+  position = qtr.readLineBlack(sensorValues);
+  error = position - 3500;
+
+  // Case 1: All white – lost line, spin to recover
+  bool allWhite = true;
+  for (int i = 0; i < SensorCount; i++) {
+    if (sensorValues[i] > 100) {
+      allWhite = false;
+      break;
+    }
+  }
+
+  while(allWhite){ // A case when the line follower leaves the line
+    if(previousError>0){       //Turn left if the line was to the left before
+      setMotorSpeeds(-70,70);
+    }
+    else{
+      setMotorSpeeds(70,-70); // Else turn right
+    }
+    position = qtr.readLineBlack(sensorValues);
+      for (int i = 0; i < SensorCount; i++) {
+      if (sensorValues[i] > 100) {
+        allWhite = false;
+        break;
+      }
+    }
+  }
+
+
+  
+  // Default: normal line following
+  PID_Linefollow(error);
+}
+
+void PID_Linefollow(int error){
+    P = error;
+    I = I + error;
+    D = error - previousError;
+    
+    Pvalue = (Kp)*P;
+    Ivalue = (Ki)*I;
+    Dvalue = (Kd)*D; 
+
+    float PIDvalue = Pvalue + Ivalue + Dvalue;
+    previousError = error;
+
+    lsp = lfspeed - PIDvalue;
+    rsp = lfspeed + PIDvalue;
+    int maxsp = 105;
+
+    if (lsp > maxsp) {
+      lsp = maxsp;
+    }
+    if (lsp < -maxsp) {
+      lsp = -maxsp;
+    }
+    if (rsp > maxsp) {
+      rsp = maxsp;
+    }
+    if (rsp < -maxsp) {
+      rsp = -maxsp;
+    }
+    setMotorSpeeds(lsp,rsp);
+
+    Serial.print("Sensor: ");
+  for (int i = 0; i < SensorCount; i++) {
+    Serial.print(sensorValues[i]);
+    Serial.print(" \t");
+  }
+  Serial.print("| Pos: ");
+  Serial.print(position);
+  Serial.print("\t| Err: ");
+  Serial.print(error);
+  Serial.print("\t| L: ");
+  Serial.print(lsp);
+  Serial.print("\t| R: ");
+  Serial.println(rsp);
+
+  delay(5);
+}
+
+void setMotorSpeeds(int left, int right) {
+  if (left >= 0) {
+    analogWrite(IN1, left);
+    analogWrite(IN2, 0);
+  } else {
+    analogWrite(IN1, 0);
+    analogWrite(IN2, -left);
+  }
+
+  if (right >= 0) {
+    analogWrite(IN3, right);
+    analogWrite(IN4, 0);
+  } else {
+    analogWrite(IN3, 0);
+    analogWrite(IN4, -right);
+  }
+}
+
+void stopMotors() {
+  analogWrite(IN1, 0);
+  analogWrite(IN2, 0);
+  analogWrite(IN3, 0);
+  analogWrite(IN4, 0);
+}
+
+void calibrateRobotPosition() {
+  int csp = 60;
+  setMotorSpeeds(-csp, csp); delay(400);
+  stopMotors(); qtr.calibrate(); delay(200);
+
+  setMotorSpeeds(csp, -csp); delay(400);
+  stopMotors(); qtr.calibrate(); delay(200);
+
+  setMotorSpeeds(csp, -csp); delay(400);
+  stopMotors(); qtr.calibrate(); delay(200);
+
+  setMotorSpeeds(-csp, csp); delay(400);
+  stopMotors(); qtr.calibrate(); delay(200);
+}
